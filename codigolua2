@@ -1,0 +1,200 @@
+function sysCall_init()
+    RobotHandle =  sim.getObjectHandle('youBot_ref#1')  
+    OdomHandle =  sim.getObjectHandle('odom#1') 
+    
+    wheelJoints={-1,-1,-1,-1} -- front left, rear left, rear right, front right
+    wheelJoints[1]=sim.getObjectHandle('rollingJoint_fl#1')
+    wheelJoints[2]=sim.getObjectHandle('rollingJoint_rl#1')
+    wheelJoints[3]=sim.getObjectHandle('rollingJoint_rr#1')
+    wheelJoints[4]=sim.getObjectHandle('rollingJoint_fr#1')
+    armJoints={}
+
+    armJoints={-1,-1,-1,-1,-1}
+    armJoints[1]=sim.getObjectHandle('youBotArmJoint0#1')
+    armJoints[2]=sim.getObjectHandle('youBotArmJoint1#1')
+    armJoints[3]=sim.getObjectHandle('youBotArmJoint2#1')
+    armJoints[4]=sim.getObjectHandle('youBotArmJoint3#1')
+    armJoints[5]=sim.getObjectHandle('youBotArmJoint4#1')
+        
+    handJoints={-1,-1}
+    handJoints[1]=sim.getObjectHandle('youBotGripperJoint1#1')
+    handJoints[2]=sim.getObjectHandle('youBotGripperJoint2#1')
+    
+    RightmotorHandle1 = wheelJoints[1]
+    RightmotorHandle2 = wheelJoints[2]
+    LeftmotorHandle1 =  wheelJoints[3]
+    LeftmotorHandle2 =  wheelJoints[4]
+    
+    flag=0
+    w = 0
+    vx = 0
+
+    odomPub=simROS.advertise('/odomR2', 'nav_msgs/Odometry')
+    odomPubgar=simROS.advertise('/garra2', 'std_msgs/Float32')
+    
+    abreGarra()
+end
+
+function sysCall_actuation()
+    velSub=simROS.subscribe('/cmd_vel2', 'geometry_msgs/Twist', 'cmd_vel_callback')
+    armSub=simROS.subscribe('/cmd_arm2', 'std_msgs/Float32','cmd_arm_callback')
+end
+
+function sysCall_sensing()
+	--Odometry Covariance matrix
+    odomcovariance={
+         0.001,0,0,0,0,0,
+         0,0.001,0,0,0,0,
+         0,0,0.001,0,0,0,
+         0,0,0,0.001,0,0,
+         0,0,0,0,0.001,0,
+         0,0,0,0,0,0.001,
+         0.001,0,0,0,0,0,
+         0,0.001,0,0,0,0,
+         0,0,0.001,0,0,0,
+         0,0,0,0.001,0,0,
+         0,0,0,0,0.001,0,
+         0,0,0,0,0,0.001}
+    OdomCovar=sim.packFloatTable(odomcovariance)
+    sim.setStringSignal('OdomCovariance',OdomCovar)
+        
+    -- Odom publisher
+    simROS.publish(odomPub, getTransformStamped(RobotHandle, 'RobotHandle', OdomHandle, 'OdomHandle'))
+    
+    posarm={-1,-1,-1}
+    posarm[1]=sim.getJointPosition(armJoints[2])
+    posarm[2]=sim.getJointPosition(armJoints[3])
+    posarm[3]=sim.getJointPosition(armJoints[4])
+    
+    garramsg={}
+    if (posarm[1]<=-0.97) then
+        if(posarm[2]<=-1.07) then
+            if(posarm[3]>=0.37) then
+                garramsg['data']=1
+            end
+        end
+    else garramsg['data']=0
+    end
+    simROS.publish(odomPubgar,garramsg)
+end
+
+function __getObjectPosition__(a,b)
+    -- compatibility routine, wrong results could be returned in some situations, in CoppeliaSim <4.0.1
+    if b==sim.handle_parent then
+        b=sim.getObjectParent(a)
+    end
+    if (b~=-1) and (sim.getObjectType(b)==sim.object_joint_type) and (sim.getInt32Param(sim.intparam_program_version)>=40001) then
+        a=a+sim.handleflag_reljointbaseframe
+    end
+    return sim.getObjectPosition(a,b)
+end
+
+function __getObjectQuaternion__(a,b)
+    -- compatibility routine, wrong results could be returned in some situations, in CoppeliaSim <4.0.1
+    if b==sim.handle_parent then
+        b=sim.getObjectParent(a)
+    end
+    if (b~=-1) and (sim.getObjectType(b)==sim.object_joint_type) and (sim.getInt32Param(sim.intparam_program_version)>=40001) then
+        a=a+sim.handleflag_reljointbaseframe
+    end
+    return sim.getObjectQuaternion(a,b)
+end
+
+function cmd_vel_callback(msg)
+    vx= msg.linear.x;
+    w=  msg.angular.z;
+
+    -- Base_controller --
+    r = 0.05 -- (m) wheel radius
+    L = 0.5    
+           
+    Vright = - ((w*L)/(2*r)) + (vx/r)
+    Vleft =  ((w*L)/(2*r)) + (vx/r)
+    sim.setJointTargetVelocity(LeftmotorHandle1,-Vleft)
+    sim.setJointTargetVelocity(LeftmotorHandle2,-Vleft)
+    sim.setJointTargetVelocity(RightmotorHandle1,-Vright)
+    sim.setJointTargetVelocity(RightmotorHandle2,-Vright)
+
+end
+
+function getTransformStamped(objHandle,name,relTo,relToName)
+    t=sim.getSystemTime()
+    p=__getObjectPosition__(objHandle,relTo)
+    o=__getObjectQuaternion__(objHandle,relTo)
+    linearVelocity, angularVelocity = sim.getObjectVelocity(objHandle)
+    return {
+        header={
+            stamp=t,
+            frame_id=relToName
+        },
+        child_frame_id=name,
+        pose = {
+            pose = {
+                position = {
+                x = p[1],
+                y = p[2],
+                z = p[0]
+                },
+                orientation = {
+                    x = o[1],
+                    y = o[2],
+                    z = o[4],
+                    w = o[3],
+                },
+            }
+        },
+        twist = {
+            twist = {
+                linear = {
+                x = linearVelocity[0],
+                y = linearVelocity[1],
+                z = linearVelocity[2]
+                },
+                angular = {
+                    x = angularVelocity[0],
+                    y = angularVelocity[1],
+                    z = angularVelocity[2]
+                },
+            }
+        },
+    }
+end
+
+function cmd_arm_callback(recieved)
+    flag=recieved.data
+    if(flag==1) then
+        extendeBraco()
+    elseif(flag==2) then
+        recolheBraco()
+    elseif(flag==3) then
+        abreGarra()
+    elseif(flag==4) then
+        fechaGarra()
+    end
+    
+end
+
+function extendeBraco()
+    sim.setJointTargetPosition(armJoints[2],-1)
+    sim.setJointTargetPosition(armJoints[3],-1.1)
+    sim.setJointTargetPosition(armJoints[4],0.4)
+end
+
+function recolheBraco()
+    sim.setJointTargetPosition(armJoints[2],0.8)
+    sim.setJointTargetPosition(armJoints[3],1)
+    sim.setJointTargetPosition(armJoints[4],-0.5)
+end
+
+function abreGarra()
+    sim.setJointTargetPosition(handJoints[1],0.025)
+    sim.setJointTargetPosition(handJoints[2],-0.05)
+end
+
+function fechaGarra()
+    sim.setJointTargetPosition(handJoints[1],0)
+    sim.setJointTargetPosition(handJoints[2],-0)
+end
+
+----------------------------------------------------------------------------
+
